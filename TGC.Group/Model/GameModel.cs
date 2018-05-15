@@ -46,12 +46,15 @@ namespace TGC.Group.Model
             "ColorCycling",
             "InnerLight",
             "ExtrudeCombined",
+            "Phong",
         };
         
         float sumValue = 0;
         float sumFactor = 1;
 
         private Microsoft.DirectX.Direct3D.Effect effect;
+
+        private TGCVector3 center;
 
         /*
          * 
@@ -60,16 +63,20 @@ namespace TGC.Group.Model
          */
 
         private TgcText2D currentTechnique;
+
+        private TgcText2D keyMap;
         
-        int technique = 0;
+        private int technique = 0;
 
         private TgcArrow arrow;
 
         private TGCVector3 scale;
-
+        
         private bool wireframe = false;
 
-        float vectorRot = 0;
+        private float vectorRot = 0;
+
+        private float vectorNorm = 1;
 
         /// <summary>
         ///     Constructor del juego.
@@ -91,13 +98,13 @@ namespace TGC.Group.Model
 
             this.initVector();
 
-            TGCVector3 center = new TGCVector3(0, 0, 0);
+            this.center = new TGCVector3(0, 0, 0);
 
-            this.setEffects(center);
+            this.setEffects();
             
             var lava = TgcTexture.createTexture(d3dDevice, MediaDir + "lava.jpg");
             this.createText(d3dDevice.Viewport.Width, d3dDevice.Viewport.Height);
-            this.createSphereMesh(lava, center);
+            this.createSphereMesh(lava);
 
             this.scale = new TGCVector3(20, 20, 20);
 
@@ -116,11 +123,17 @@ namespace TGC.Group.Model
             this.currentTechnique.Position = new Point(width - 200, height - 100);
             this.currentTechnique.Size = new Size(100, 1000);
             this.currentTechnique.Color = Color.DarkRed;
+
+            this.keyMap = new TgcText2D();
+            this.keyMap.Position = new Point(20, height - 400);
+            this.keyMap.Size = new Size(1000, 1000);
+            this.keyMap.Color = Color.Black;
+            this.keyMap.Text = "Teclas:\nQ para cambiar de tecnica.\nU para mostrar el wireframe.\nI para mostrar el vector.\nO para rotar el mesh.\nZ/X para mover el vector.\nC/V para rotar el vector.\nB/N para modificar su norma.\nArriba/Abajo para modificar el factor";
         }
 
-        private void createSphereMesh(TgcTexture texture, TGCVector3 center)
+        private void createSphereMesh(TgcTexture texture)
         {
-            var rawSphere = new TGCSphere(1, texture, center);
+            var rawSphere = new TGCSphere(1, texture, this.center);
             rawSphere.LevelOfDetail = 4;
             rawSphere.updateValues();
             this.sphere = rawSphere.toMesh("Mesh");
@@ -129,10 +142,10 @@ namespace TGC.Group.Model
             this.sphere.Technique = this.techniques[this.technique];
         }
 
-        private void setEffects(TGCVector3 center)
+        private void setEffects()
         {
             this.effect = TgcShaders.loadEffect(Game.Default.ShadersDirectory + "BasicShader.fx");
-            this.effect.SetValue("center", new[] { center.X, center.Y, center.Z, 1f });
+            this.effect.SetValue("center", new[] { this.center.X, this.center.Y, this.center.Z, 1f });
         }
 
         public override void Update()
@@ -143,15 +156,20 @@ namespace TGC.Group.Model
 
             this.time += ElapsedTime;
 
-            this.sphere.Transform = TGCMatrix.Scaling(this.scale) * TGCMatrix.RotationYawPitchRoll(this.rotation, 0, 0);;
+            this.sphere.Transform = TGCMatrix.Scaling(this.scale) * TGCMatrix.RotationYawPitchRoll(this.rotation, 0, 0) * TGCMatrix.Translation(this.center);
 
             this.updateEffectVector();
 
             this.effect.SetValue("time", this.time);
 
-            this.effect.SetValue("effectVector", new[] { this.effectVector.X, this.effectVector.Y, this.effectVector.Z});
+            TGCVector3 centeredEffectVector = this.effectVector - this.center;
+            this.effect.SetValue("effectVector", new[] { centeredEffectVector.X, centeredEffectVector.Y, centeredEffectVector.Z});
 
             this.effect.SetValue("factor", (float)Math.Round(sumValue, 2));
+
+            this.effect.SetValue("matViewProj", D3DDevice.Instance.Device.Transform.View * D3DDevice.Instance.Device.Transform.Projection);
+
+            this.effect.SetValue("eyePosition", new[] { this.Camara.Position.X, this.Camara.Position.Y, this.Camara.Position.Z });
 
             PostUpdate();
         }
@@ -174,6 +192,7 @@ namespace TGC.Group.Model
 
             this.arrow.Render();
             this.currentTechnique.render();
+            this.keyMap.render();
 
             PostRender();
         }
@@ -255,6 +274,19 @@ namespace TGC.Group.Model
                 this.effectVector.Z = (float)Math.Round(FastMath.Sin(this.vectorRot) * 20, 4);
             }
 
+            if(Input.keyDown(Key.B))
+            {
+                TGCVector3 v = this.effectVector;
+                v.Multiply(ElapsedTime);
+                this.effectVector += v;
+            }
+
+            if (Input.keyDown(Key.N))
+            {
+                TGCVector3 v = this.effectVector;
+                v.Multiply(ElapsedTime);
+                this.effectVector -= v;
+            }
         }
 
 
@@ -273,7 +305,7 @@ namespace TGC.Group.Model
 
         private void updateEffectVector()
         {
-            this.arrow.PStart = TGCVector3.Empty;
+            this.arrow.PStart = this.center;
             this.arrow.PEnd = this.effectVector;
             this.arrow.updateValues();
         }
@@ -310,6 +342,7 @@ namespace TGC.Group.Model
             this.sphere.Dispose();
             this.arrow.Dispose();
             this.currentTechnique.Dispose();
+            this.keyMap.Dispose();
             this.effect.Dispose();
         }
     }

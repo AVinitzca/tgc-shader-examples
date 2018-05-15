@@ -17,6 +17,7 @@ float4 center;
 float3 effectVector;
 float time = 0;
 float factor;
+float3 eyePosition;
 
 //Textura para DiffuseMap
 texture texDiffuseMap;
@@ -48,9 +49,9 @@ struct VS_OUTPUT
     float4 Color : COLOR0;
 };
 
-float3 dotLength(float3 vectorOne, float3 vectorTwo)
+float3 dotNormalized(float3 vectorOne, float3 vectorTwo)
 {
-	return dot(vectorOne, vectorTwo) / length(vectorOne) / length(vectorTwo);
+	return dot(normalize(vectorOne), normalize(vectorTwo));
 }
 
 VS_OUTPUT vs_main(VS_INPUT Input)
@@ -73,19 +74,33 @@ VS_OUTPUT vs_main(VS_INPUT Input)
 
 VS_OUTPUT vs_expansion(VS_INPUT Input)
 {
-	Input.Position = lerp(Input.Position, center, sin(time) - 1);
-	return vs_main(Input);
+	VS_OUTPUT Output;
+
+	//Proyectar posicion
+	Output.Position = mul(Input.Position, matWorld);
+	Output.Position = lerp(Output.Position, center, sin(time) - 1);
+	Output.Position = mul(Output.Position, matViewProj);
+
+	Output.Normal = Input.Normal;
+
+	//Propago las coordenadas de textura
+	Output.Texcoord = Input.Texcoord;
+
+	//Propago el color x vertice
+	Output.Color = Input.Color;
+
+	return Output;
 }
 
 VS_OUTPUT vs_extrude(VS_INPUT Input)
 {
 	VS_OUTPUT Output;
 
-	float pos = clamp(abs(dotLength(Input.Normal, effectVector)), factor, 10);
+	float pos = 1 + clamp(abs(dotNormalized(Input.Normal, effectVector)), factor, 10);
 	
-	Input.Position.x *= 1 + pos;
-	Input.Position.y *= 1 + pos;
-	Input.Position.z *= 1 + pos;
+	Input.Position.x *= pos;
+	Input.Position.y *= pos;
+	Input.Position.z *= pos;
 
 	Output.Position = mul(Input.Position, matWorldViewProj);;
 	
@@ -106,11 +121,11 @@ VS_OUTPUT vs_identity_plane_extrude(VS_INPUT Input)
 	float3 planeNormal = float3(cos(timeFactor), 1, sin(timeFactor));
 
 	float parallel = dot(Input.Position, planeNormal);
-	float extrude = (parallel > -0.1 && parallel < 0.1) * 0.1;
+	float extrude = 1 + (parallel > -0.1 && parallel < 0.1) * 0.1;
 
-	Input.Position.x *= 1 + extrude;
-	Input.Position.y *= 1 + extrude;
-	Input.Position.z *= 1 + extrude;
+	Input.Position.x *= extrude;
+	Input.Position.y *= extrude;
+	Input.Position.z *= extrude;
 
 	Output.Position = mul(Input.Position, matWorldViewProj);;
 
@@ -127,13 +142,13 @@ VS_OUTPUT vs_planar_extrude(VS_INPUT Input)
 {
 	VS_OUTPUT Output;
 	
-	float parallel = dotLength(Input.Position, effectVector);
+	float parallel = dotNormalized(Input.Position, effectVector);
 
-	float extrude = (parallel > -0.1 && parallel < 0.1) * 0.2;
+	float extrude = 1 + (parallel > -0.1 && parallel < 0.1) * 0.2;
 
-	Input.Position.x *= 1 + extrude;
-	Input.Position.y *= 1 + extrude;
-	Input.Position.z *= 1 + extrude;
+	Input.Position.x *= extrude;
+	Input.Position.y *= extrude;
+	Input.Position.z *= extrude;
 
 	Output.Position = mul(Input.Position, matWorldViewProj);;
 
@@ -164,9 +179,9 @@ float4 ps_color_cycling(VS_OUTPUT Input) : COLOR0
 	float3 normal = float3(sin(time), 1, cos(time));
 	float3 other = float3(tan(time), 1, -tan(time));
 
-	float r = abs(dotLength(rotated, Input.Normal));
-	float g = abs(dotLength(normal, Input.Normal));
-	float b = abs(dotLength(other, Input.Normal));
+	float r = abs(dotNormalized(rotated, Input.Normal));
+	float g = abs(dotNormalized(normal, Input.Normal));
+	float b = abs(dotNormalized(other, Input.Normal));
 
 	return float4(r, g, b, 1);
 }
@@ -194,7 +209,7 @@ VS_LIGHT_OUTPUT vs_lightstruck(VS_INPUT Input)
 float4 ps_inner_light(VS_LIGHT_OUTPUT Input) : COLOR0
 {
 	float4 textureColor = tex2D(diffuseMap, Input.Texcoord);
-	float innerLight = clamp(dotLength(Input.InterpolatedPosition, effectVector), 0.1, 1);
+	float innerLight = clamp(dotNormalized(Input.InterpolatedPosition, effectVector), 0.1, 1);
 
 	return textureColor * innerLight;
 }
@@ -234,6 +249,55 @@ VS_EXTRUDED_OUTPUT vs_identity_plane_extrude_with_position(VS_LIGHT_OUTPUT Input
 float4 ps_extrude(VS_EXTRUDED_OUTPUT Input) : COLOR0
 {
 	return tex2D(diffuseMap, Input.Texcoord) + float4(0, 0, Input.InRange * 10 * (sin(time * 2) + 1.5), 1);
+}
+
+//Output del Vertex Shader
+struct VS_PHONG_OUTPUT
+{
+	float4 Position : POSITION0;
+	float2 Texcoord : TEXCOORD0;
+	float3 WorldNormal : TEXCOORD1;
+	float3 WorldPosition : TEXCOORD2; 
+};
+
+
+VS_PHONG_OUTPUT vs_phong(VS_INPUT Input)
+{
+	VS_PHONG_OUTPUT Output;
+	
+	Output.Position = mul(Input.Position, matWorldViewProj);
+
+	Output.Texcoord = Input.Texcoord;
+
+	Output.WorldPosition = mul(Input.Position, matWorld).xyz;
+	
+	Output.WorldNormal = mul(Input.Normal, matWorld).xyz;
+
+	return Output;
+}
+
+float4 ps_phong(VS_PHONG_OUTPUT Input) : COLOR0
+{
+	float4 textureFragment = tex2D(diffuseMap, Input.Texcoord);
+	
+	Input.WorldNormal = normalize(Input.WorldNormal);
+
+	float ambientAmount    = 0.2;
+	float diffuseAmount    = 0.7;
+	float specularAmount   = factor;
+	float ambient = ambientAmount;
+
+	float3 lightDirection  = normalize(effectVector - Input.WorldPosition);
+	float diffuse          = saturate(dotNormalized(Input.WorldNormal, lightDirection)) * 0.7;  
+
+	float3 eyeDirection    = normalize(Input.WorldPosition - eyePosition);
+	float specular         = saturate(dotNormalized(reflect(lightDirection, Input.WorldNormal), eyeDirection));
+	float power            = 16.84;
+	specular               = pow(specular, power);
+	specular              *= specularAmount;
+
+	textureFragment.rgb = saturate(textureFragment * (saturate(ambient + diffuse)) + specular);
+	return textureFragment;
 }
 
 
@@ -315,5 +379,14 @@ technique ExtrudeCombined
 	{
 		VertexShader = compile vs_3_0 vs_identity_plane_extrude_with_position();
 		PixelShader = compile ps_3_0 ps_extrude();
+	}
+};
+
+technique Phong
+{
+	pass Pass_0
+	{
+		VertexShader = compile vs_3_0 vs_phong();
+		PixelShader = compile ps_3_0 ps_phong();
 	}
 };
